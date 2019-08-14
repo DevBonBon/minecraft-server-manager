@@ -1,4 +1,6 @@
 const https = require('https');
+const fs = require('fs-extra');
+const crypto = require('crypto');
 /**
  * Used to get information about Minecraft Server versions and to download them
  */
@@ -53,6 +55,40 @@ class Updater {
           resolve(versions);
         });
       }).on('error', error => { reject(error); });
+    });
+  }
+  /**
+   * Downloads the requested version of Minecraft Server into the the given path
+   * @param  {String} version Version which to download or if invalid latest release
+   * @param  {String} path An absolute file path where to write the downloaded file
+   * @return {Promise} Resolves to version of downloaded server or rejects with an Error object
+   */
+  download (version, path) {
+    return this.versions.then(versions => {
+      return new Promise((resolve, reject) => {
+        let url = versions.release[version] || versions.snapshot[version] || versions.release[versions.latest.release];
+        https.get(new URL(url), (response) => {
+          let data = '';
+          response.on('data', chunk => { data += chunk; });
+          response.on('end', () => { resolve(data); });
+        }).on('error', error => { reject(error); });
+      });
+    }).then(data => {
+      return new Promise((resolve, reject) => {
+        const fileStream = fs.createWriteStream(path);
+        const hash = crypto.createHash('sha1');
+        const executable = JSON.parse(data);
+        https.get(new URL(executable.downloads.server.url), (response) => {
+          response.pipe(fileStream);
+          response.on('data', chunk => { hash.update(chunk); });
+          response.on('end', () => {
+            if (executable.downloads.server.sha1 !== hash.digest('hex')) {
+              reject(new Error('File hash mismatch!'));
+            }
+          });
+          fileStream.on('finish', () => { resolve(executable.id); });
+        }).on('error', error => { reject(error); });
+      });
     });
   }
 }
