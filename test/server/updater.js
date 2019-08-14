@@ -41,4 +41,26 @@ describe('Updater', function () {
       });
     });
   });
+
+  describe('methods', function () {
+    before(function () {
+      this.updater = new Updater();
+      this.reply = {
+        latest: { release: versions[0].id, snapshot: versions[1].id },
+        versions: []
+      };
+      this.result = { latest: this.reply.latest, release: {}, snapshot: {} };
+      for (const version of versions) {
+        let location = `${url.default.origin}/${version.file}`;
+        this.reply.versions.push({ id: version.id, type: version.type, url: `${location}.json` });
+        this.result[version.type][version.id] = `${location}.json`;
+      }
+    });
+
+    describe('fetchVersions()', function () {
+      it('should fetch and return parsed versions', async function () {
+        scope.default.get(url.default.pathname).reply(200, this.reply);
+        assert.deepEqual(await this.updater.fetchVersions(), this.result);
+      });
+    });
 });
