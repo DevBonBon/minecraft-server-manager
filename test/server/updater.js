@@ -66,9 +66,18 @@ describe('Updater', function () {
         snapshot: {}
       };
       for (const version of versions) {
-        let location = `${url.default.origin}/${version.file}`;
-        this.reply.versions.push({ id: version.id, type: version.type, url: `${location}.json` });
-        this.result[version.type][version.id] = `${location}.json`;
+        const location = `${url.default.origin}/${version.file}`;
+        const now = new Date();
+        this.reply.versions.push({
+          id: version.id,
+          type: version.type,
+          url: `${location}.json`,
+          time: now.toJSON()
+        });
+        this.result[version.type][version.id] = {
+          url: `${location}.json`,
+          age: now.getTime()
+        };
         this.download[version.type][version.id] = {
           id: version.id,
           downloads: { server: { sha1: this.download.hash, url: `${location}.jar` } }
@@ -85,7 +94,7 @@ describe('Updater', function () {
     });
     describe('download()', function () {
       it('should download a release version', async function () {
-        let version = versions[0];
+        const version = versions[0];
         scope.default
           .get(`/${version.file}.json`).reply(200, this.download.release[version.id])
           .get(`/${version.file}.jar`).reply(200, this.download.reply);
@@ -94,7 +103,7 @@ describe('Updater', function () {
         assert.equal(await fs.readFile(file, 'utf8'), this.download.reply);
       });
       it('should download a snapshot version', async function () {
-        let version = versions[1];
+        const version = versions[1];
         scope.default
           .get(`/${version.file}.json`).reply(200, this.download.snapshot[version.id])
           .get(`/${version.file}.jar`).reply(200, this.download.reply);
@@ -103,7 +112,7 @@ describe('Updater', function () {
         assert.equal(await fs.readFile(file, 'utf8'), this.download.reply);
       });
       it('should download the latest version', async function () {
-        let version = versions[0];
+        const version = versions[0];
         scope.default
           .get(`/${version.file}.json`).reply(200, this.download.release[version.id])
           .get(`/${version.file}.jar`).reply(200, this.download.reply);
@@ -112,7 +121,7 @@ describe('Updater', function () {
         assert.equal(await fs.readFile(file, 'utf8'), this.download.reply);
       });
       it('should reject with an Error if wrong file hash', async function () {
-        let version = versions[0];
+        const version = versions[0];
         scope.default
           .get(`/${version.file}.json`).reply(200, this.download.release[version.id])
           .get(`/${version.file}.jar`).reply(200, 'bad data');
