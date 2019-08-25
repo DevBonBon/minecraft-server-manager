@@ -1,6 +1,5 @@
 // NodeJS Imports
 const archiver = require('archiver');
-const axios = require('axios');
 const { spawn } = require('child_process');
 const fs = require('fs-extra');
 const FS = fs.constants;
@@ -9,81 +8,71 @@ const path = require('path');
 const util = require('util');
 const exec = util.promisify(require('child_process').exec);
 
-
 // minecraft-server-manager Imports
 const MSMUtil = require('../util/util');
 const Util = new MSMUtil();
 const Eula = require('./Eula');
-
-let minecraftProperties = {
-    settings: {
-        javaHome: "",
-        javaPath: "",
-        minecraftDirectory: path.join(Util.homeDir, 'minecraft_server'),
-        serverJar: 'server.jar',
-        memory: {
-            minimum: 1,
-            maximum: 1,
-            units: "G"
-        },
-        backups: {
-            path: path.join(Util.homeDir, 'minecraft_server', 'backups', 'worlds'),
-            numToKeep: 5
-        }
-    },
-    settingsFileName: 'server.properties',
-    acceptedEula: false,
-    allowedCommands: [],
-    backupList: [],
-    bannedIps: [],
-    bannedPlayers: [],
-    detectedVersion: {},
-    eulaFound: false,
-    eulaUrl: 'https://account.mojang.com/documents/minecraft_eula',
-    fullHelp: [],
-    helpPages: 0,
-    installed: false,
-    installedVersions: [],
-    ipAddress: '',
-    needsInstallation: true,
-    ops: [],
-    osType: os.type(),
-    playerInfo: {players: [], summary: ''},
-    serverOutput: [],
-    serverOutputCaptured: false,
-    serverProperties: [],
-    serverProcess: null,
-    started: false,
-    starting: false,
-    startTime: null,
-    stopping: false,
-    stopped: false,
-    updateAvailable: false,
-    userCache: {},
-    versions: {
-        installed: [],
-        latest: {},
-        release: [],
-        snapshot: []
-    },
-    whitelist: [],
-    worldName: ""
-};
+const Updater = require(`${__dirname}/Updater.js`);
 
 class MinecraftServer {
-    constructor () {
-        this.properties = Object.assign({}, minecraftProperties);
+    constructor (workdir = MinecraftServer.default.settings.workdir) {
+        this.properties = Object.assign({}, MinecraftServer.default);
+        this.settings.workdir = workdir;
         this.eula = new Eula();
+        this.updater = new Updater();
         this.bufferMinecraftOutput = this.bufferMinecraftOutput.bind(this);
-        this.properties.ipAddress = require('underscore')
-            .chain(require('os').networkInterfaces())
-            .values()
-            .flatten()
-            .find({family: 'IPv4', internal: false})
-            .value()
-            .address;
     }
-        
+
+    get address () {
+        const server = {};
+        if (this.properties.serverProperties.length) {
+            for (let item of this.properties.serverProperties) {
+                if (item.name === 'server-ip') {
+                    server.address = item.value;
+                } else if (item.name === 'server-port') {
+                    server.port = item.value;
+                }
+            }
+        }
+        if (!server.address) {
+            const ifaces = os.networkInterfaces();
+            const ifname = Object.keys(ifaces)
+                .find(ifname => ifaces[ifname].every(iface => iface.family === 'IPv4' && !iface.internal));
+            server.address = ifaces[ifname].address;
+        }
+    }
+
+    get commands () {
+        return new Promise(async (resolve, reject) => {
+            await this.listCommands();
+            resolve(this.fullHelp || {});
+        });
+    }
+
+    get bannedIps () {
+        return this.bannedIps;
+    }
+
+    get bannedPlayers () {
+        return this.bannedPlayers;
+    }
+
+    get playerInfo () {
+        return this.playerInfo;
+    }
+
+    get backupList () {
+        return this.backupList;
+    }
+
+    get ops () {
+        return this.ops;
+    }
+
+    get properties () {
+        return this.properties;
+    }
+
     async init () {
         let properties = this.properties;
         try {
@@ -92,8 +81,7 @@ class MinecraftServer {
             await this.log('Initializing MinecraftServer...');
             await Promise.all([
                 this.detectJavaHome(),
-                this.checkForMinecraftInstallation(),
-                this.getMinecraftVersions()
+                this.checkForMinecraftInstallation()
             ]);
         } catch (err) {
             return err;
@@ -103,7 +91,7 @@ class MinecraftServer {
     async acceptEula () {
         let properties = this.properties;
         let minecraftDirectory = properties.settings.minecraftDirectory;
-        
+
         try {
             await this.log('Checking and accepting MinecraftServer EULA...');
             if (properties.installed && (properties.acceptedEula === 'false' || !properties.acceptedEula)) {
@@ -119,20 +107,20 @@ class MinecraftServer {
 
     async backupWorld (worldName) {
         await this.log('Backing up MinecraftServer world...');
-    
+
         let properties = this.properties;
         let minecraftDirectory = properties.settings.minecraftDirectory;
         let minecraftWasRunning = false;
         let backupDir = path.resolve(properties.settings.backups.path);
         let archive;
         let output;
-    
+
         worldName = worldName || 'world';
         if (properties.started) {
             minecraftWasRunning = true;
             await this.stop();
         }
-    
+
         await fs.ensureDir(backupDir, {recursive: true});
         output = await fs.createWriteStream(path.join(backupDir, `${worldName}_${Util.getDateTime()}.zip`));
         archive = archiver('zip', {
@@ -142,7 +130,7 @@ class MinecraftServer {
 
         await archive.directory(path.join(minecraftDirectory, worldName), false);
         await archive.finalize();
-        
+
         await this.log(`Backup size: ${archive.pointer()} total bytes.`);
         await this.log('MinecraftServer World backed up.');
         await this.listWorldBackups();
@@ -194,7 +182,7 @@ class MinecraftServer {
                 outputString = this.properties.serverOutput.join(os.EOL);
                 outputLines = outputString.split(os.EOL);
             }
-    
+
             for (let line of outputLines) {
                 if (line.indexOf('eula.txt') !== -1) {
                     // Minecraft has changed the wording of EULA errors in the log as of 1.14.4. BEWARE.
@@ -269,7 +257,7 @@ class MinecraftServer {
         try {
             await this.log(`Checking for Minecraft to be stopped...`);
             await this.waitForBufferToBeFull();
-            
+
             // Output buffer could be array of arrays, so combine into something usable.
             if (Array.isArray(properties.serverOutput) && properties.serverOutput.length) {
                 outputString = properties.serverOutput.join(os.EOL);
@@ -305,7 +293,8 @@ class MinecraftServer {
     async checkForMinecraftUpdate () {
         try {
             await this.log('Checking for Minecraft server update...');
-            await this.getMinecraftVersions();
+            const versions = await this.updater.versions();
+            if (versions[this.properties.detectedVersion.full].age < versions.latest)
             let detectedVersion = this.properties.detectedVersion;
             let release = {major: '', minor: '', release: '', full: this.properties.versions.latest.release};
             let releaseParts = [];
@@ -816,7 +805,7 @@ class MinecraftServer {
                 await this.attachToMinecraft();
                 serverProcess.stdin.write(`/help${os.EOL}`);
                 await this.waitForBufferToBeFull();
-    
+
                 // Output buffer could be array of arrays, so combine into something usable.
                 if (Array.isArray(properties.serverOutput) && properties.serverOutput.length) {
                     outputString = properties.serverOutput.join('\n');
@@ -826,11 +815,11 @@ class MinecraftServer {
                     if (line.indexOf('Showing help page') !== -1) {
                         // Versions prior to 1.13 "page" the help
                         await this.detachFromMinecraft();
-    
+
                         let part1 = line.split('Showing help page ');
                         let part2 = part1[1].split(' ');
                         properties.helpPages = parseInt(part2[2]);
-    
+
                         await this.attachToMinecraft();
                         try {
                             for (let i = 1; i <= properties.helpPages; i++) {
@@ -881,17 +870,17 @@ class MinecraftServer {
                 // debugger; // to go join for testing
                 await this.attachToMinecraft();
                 serverProcess.stdin.write(`/list${os.EOL}`);
-                
+
                 while (!properties.serverOutput.length) {
                     await this.waitForBufferToBeFull();
                 }
-            
+
                 // Output buffer could be array of arrays, so combine into something usable.
                 if (Array.isArray(properties.serverOutput) && properties.serverOutput.length) {
                     outputString = properties.serverOutput.join('\n');
                     outputLines = outputString.split('\n');
                 }
-                
+
                 // First line is the summary,
                 // followed by line(s) of player names, comma+space separated.
                 for (let line of outputLines) {
@@ -901,13 +890,13 @@ class MinecraftServer {
                     line = line.split(minecraftLogPrefixRegex)[1];
                     // Nuke preceding and trailing whitespace.
                     line = line.trim();
-    
+
                     if (line !== "") {
                         if (line.indexOf("players online") !== -1) {
                             playersList.summary = line.trim().slice(0, -1);
                             continue;
                         }
-        
+
                         players = line.split(',');
                         for (let player of players) {
                             player = {
@@ -926,9 +915,9 @@ class MinecraftServer {
                         }
                     }
                 }
-    
+
                 await this.detachFromMinecraft();
-    
+
                 // Add cached "offline" users.
                 for (let cachedPlayer of this.properties.userCache) {
                     cachedPlayer.key = cachedPlayer.uuid;
@@ -968,7 +957,7 @@ class MinecraftServer {
         let backupDir = path.resolve(settings.backups.path);
         let backupList = [];
         let files = [];
-        
+
         try {
             await this.log('Getting list of MinecraftServer world backups...');
             properties.backupList = [];
@@ -977,7 +966,7 @@ class MinecraftServer {
                 let fileInfo,
                     fileItem = {},
                     fileParts = file.split('.');
-    
+
                 if (fileParts[1] === 'zip') {
                     fileInfo = fileParts[0].split('_');
                     fileItem.fileName = file;
@@ -1001,7 +990,7 @@ class MinecraftServer {
         let properties = this.properties;
         let settings = properties.settings;
         let backupDir = path.resolve(settings.backups.path);
-        
+
         try {
             await this.listWorldBackups();
             for (let backup of properties.backupList) {
@@ -1136,7 +1125,7 @@ class MinecraftServer {
         let minecraftLogPrefixRegex = /\[\w*\s\w*\/\w*\]:/;
         let outputLines = [];
         let outputString = "";
-        
+
         try {
             await this.log(`Running Minecraft command: ${command}`);
             if (started) {
@@ -1235,9 +1224,9 @@ class MinecraftServer {
                             'pipe'  // Direct child's stderr to parent stderr
                         ]
                     });
-                    
+
                     starting = true;
-                    
+
                     await this.checkForMinecraftToBeStarted();
                     await this.getEula();
                     await this.updateStatus();
@@ -1359,7 +1348,7 @@ class MinecraftServer {
             return Promise.reject(new Error('Already attached to Minecraft.'));
         }
     }
-    
+
     async detachFromMinecraft () {
         let properties = this.properties;
         await this.log('Detaching from Minecraft output.');
@@ -1416,5 +1405,88 @@ class MinecraftServer {
         await Util.clearLog('minecraft-server.log');
     }
 }
+
+MinecraftServer.status = {
+    'STOPPED': 0,
+    'STARTING': 1,
+    'STARTED': 2,
+    'STOPPING': 3
+};
+
+MinecraftServer.default = {
+    settings: {
+        file: 'server.properties',
+        java: '',
+        // javaHome: '',
+        // javaPath: '',
+        workdir: path.join(Util.homeDir, 'minecraft_server'),
+        // minecraftDirectory: path.join(Util.homeDir, 'minecraft_server'),
+        serverJar: 'server.jar',
+        memory: {
+            minimum: 1,
+            maximum: 1,
+            units: 'G'
+        },
+        backups: {
+            folder: 'backups',
+            numToKeep: 5
+        }
+    },
+    // settingsFileName: 'server.properties',
+    eula: {
+        accepted: false,
+        exists: false,
+        url: 'https://account.mojang.com/documents/minecraft_eula'
+    },
+    administration: {
+        ops: [],
+        usercache: {}
+    },
+    player: {
+      list: [],
+      summary: ''
+    },
+    properties: [],
+    status: MinecraftServer.status['STOPPED'],
+    version: {
+        id: '',
+        type: ''
+    }
+    // acceptedEula: false,
+    allowedCommands: [],
+    backupList: [],
+    bannedIps: [],
+    bannedPlayers: [],
+    detectedVersion: {},
+    // eulaFound: false,
+    // eulaUrl: 'https://account.mojang.com/documents/minecraft_eula',
+    fullHelp: [],
+    helpPages: 0,
+    installed: false,
+    installedVersions: [],
+    needsInstallation: true,
+    // ops: [],
+    osType: os.type(),
+    // playerInfo: {players: [], summary: ''},
+    serverOutput: [],
+    serverOutputCaptured: false,
+    // serverProperties: [],
+    serverProcess: null,
+    started: false,
+    starting: false,
+    startTime: null,
+    stopping: false,
+    stopped: false,
+    updateAvailable: false,
+    // userCache: {},
+    versions: {
+        installed: [],
+        latest: {},
+        release: [],
+        snapshot: []
+    },
+    whitelist: [],
+    worldName: ""
+};
 
 module.exports = MinecraftServer;

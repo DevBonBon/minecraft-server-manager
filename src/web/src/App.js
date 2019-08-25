@@ -47,7 +47,7 @@ export default class App extends React.Component {
 
         this.startMinecraftStatus();
     }
-    
+
     getTheme () {
         const theme = createMuiTheme({
             "tableRowColumn": {
@@ -66,7 +66,7 @@ export default class App extends React.Component {
                 }
             }
         });
-        
+
         return theme;
     }
 
@@ -76,7 +76,7 @@ export default class App extends React.Component {
         }
         this.stopMinecraftStatus();
     }
-    
+
     handleChange (event, value) {
         this.setState({ value });
     }
@@ -150,7 +150,7 @@ export default class App extends React.Component {
             });
         }, pingTime);
     }
-  
+
     getMinecraftServerProperties () {
         if (debug) {
             console.log('Retrieving Minecraft Server properties.');
@@ -170,7 +170,7 @@ export default class App extends React.Component {
             console.log('An error occurred getting the server properties:', e);
         });
     }
-  
+
     handleAcceptEula () {
         axios({
             method: 'post',
@@ -185,7 +185,7 @@ export default class App extends React.Component {
             this.setState({ eulaOpen: false });
         });
     }
-  
+
     handleDeclineEula () {
         axios({
             method: 'post',
@@ -224,7 +224,7 @@ export default class App extends React.Component {
             clearTimeout(this.playersTimerId);
         }
     }
-    
+
     render () {
         let minecraftProperties = this.state.minecraftProperties;
 
@@ -260,7 +260,7 @@ export default class App extends React.Component {
                     startMinecraftStatus = { this.startMinecraftStatus }
                     stopMinecraftStatus = { this.stopMinecraftStatus }
                 /> }
-                { this.state.value === 4 && <Preferences 
+                { this.state.value === 4 && <Preferences
                     apiSettings = { this.state.apiSettings }
                 /> }
                 { this.state.value === 5 && <About
@@ -270,7 +270,7 @@ export default class App extends React.Component {
                     anchorOrigin = {
                         {
                             vertical: 'bottom',
-                            horizontal: 'left' 
+                            horizontal: 'left'
                         }
                     }
                     open = { !minecraftProperties.started }
