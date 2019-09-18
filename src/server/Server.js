@@ -293,6 +293,10 @@ Server.paths = {
     return path.join(Server.paths.servers, 'servers.json');
   }
 };
+Server.versions = {
+  ping: '1.7',
+  rcon: '1.9-pre4'
+};
 /**
  * Values for the default Server instance
  * @type {Object}
@@ -319,7 +323,7 @@ Server.default = {
    * If 'latest' or the version isn't available, the newest stable one will be used
    * @type {String}
    */
-  version: 'latest',
+  version: 'latest@release',
   /**
    * Link to custom Minecraft Server version manifest
    * If evaluates to false the official one will be used
