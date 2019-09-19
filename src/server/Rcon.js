@@ -39,9 +39,10 @@ class Rcon {
    * @param  {Number} [type=Packet.type.COMMAND] Type of packet to send
    * @return {Promise} Resolves to an array of responses or rejects with an Error
    */
-  send (payload, type = Packet.type.COMMAND, id = Packet.id()) {
+  send (payload, type, timeout = this.timeout) {
+    const id = Packet.id();
     return Promise.race([
-      new Promise(resolve => setTimeout(resolve, this.timeout, new Error(Rcon.ERR.PACKET))),
+      new Promise(resolve => setTimeout(resolve, timeout, new Error(Rcon.ERR.PACKET))),
       new Promise(resolve => {
         this.queue.push(Packet.write(id, type, payload));
         this.queue.push(Packet.write(id, Packet.type.END, ''));
@@ -54,12 +55,14 @@ class Rcon {
   /**
    * Send the given command through an authenticated RCON connection
    * @param  {String} command
+   * @param  {Number} [timeout=this.timeout] Timeout for packet response
    * @return {Promise} Resolves to response string or rejects with an Error
    */
-  command (command) {
+  command (command, timeout = this.timeout) {
     return !this.authenticated
       ? Promise.reject(new Error(Rcon.ERR.AUTH))
-      : this.send(command).then(packets => packets.map(packet => packet.payload).join(''));
+      : this.send(command, Packet.type.COMMAND, timeout)
+        .then(packets => packets.map(packet => packet.payload).join(''));
   }
 
   /**
