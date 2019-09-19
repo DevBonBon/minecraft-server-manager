@@ -1,5 +1,6 @@
 /**
- * Functions for managing packets used by the RCON protocol
+ * Functions for managing packets used by the (Minecraft) RCON protocol
+ * https://wiki.vg/RCON
  */
 class Packet {
   /**
@@ -26,7 +27,8 @@ class Packet {
     buffer.writeInt32LE(10 + length, 0);
     buffer.writeInt32LE(id, 4);
     buffer.writeInt32LE(type, 8);
-    buffer.write(`${payload}\0\0`, 12, 'ascii'); // Payload with 2-byte padding
+    // Null terminate the payload and the packet
+    buffer.write(`${payload}\x00\x00`, 12, 'ascii');
     return buffer;
   }
 
@@ -53,7 +55,6 @@ class Packet {
   }
 }
 // RCON packet type Integers understood by the Mineccraft Server
-// https://wiki.vg/RCON#Packets
 Packet.type = {
   AUTH: 3,
   AUTH_RES: 2,
