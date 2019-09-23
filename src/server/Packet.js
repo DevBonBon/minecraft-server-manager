@@ -1,3 +1,5 @@
+const { Transform } = require('stream');
+
 /**
  * Functions for managing packets used by the (Minecraft) RCON protocol
  * https://wiki.vg/RCON
@@ -18,7 +20,7 @@ class Packet {
    * @param  {String} payload Data to be sent encoded in 'ASCII'
    * @return {Buffer} Created packet
    */
-  static write (id, type, payload) {
+  static create (id, type, payload) {
     // Length of payload in bytes when encoded in ASCII
     const length = Buffer.byteLength(payload, 'ascii');
     // 14 bytes for the length, ID, type and 2-byte padding
@@ -53,6 +55,47 @@ class Packet {
       throw new Error('Invalid packet!');
     }
   }
+
+  /**
+   * Creates a new Transform stream, that splits the buffer into Packets
+   * @return {stream.Transform}
+   */
+  static stream () {
+    let data = Buffer.allocUnsafe(0);
+    return new Transform({
+      readableObjectMode: true,
+      transform (chunk, encoding, callback) {
+        data = Buffer.concat([data, chunk], data.length + chunk.length);
+        // 'includes' is not optimal performance wise, but it is nice to look at
+        let offset = 0;
+        // First 12 bytes are guaranteed to be the packet length, id and type
+        while (data.includes('\0\0', offset + 12)) {
+          this.push(Packet.read(data.slice(offset, offset += data.readInt32LE(offset) + 4)));
+        }
+        data = data.slice(offset);
+        callback();
+      }
+    });
+  }
+
+  static queue (maxConcurrent) {
+    let concurrent = 0;
+    return new Transform({
+      transform (packet, encoding, callback) {
+        const handler = () => {
+          if (concurrent < maxConcurrent) {
+            concurrent++;
+            this.push(packet);
+            this.off('next', handler);
+          }
+        };
+        this.on('next', handler);
+        this.emit('next');
+        callback();
+      }
+    }).on('consume', function () { concurrent--; this.emit('next'); })
+      .setMaxListeners(0); // We use the internal listener array as the queue
+  }
 }
 // RCON packet type Integers understood by the Mineccraft Server
 Packet.type = {
@@ -66,7 +109,7 @@ Packet.type = {
 // Predefined payloads the Minecraft Server can send
 Packet.payload = {
   // Sent when a packet with above invalid type is received
-  END: `Unknown request ${Packet.type.END.toString(16)}\x00\x00`
+  END: `Unknown request ${Packet.type.END.toString(16)}`
 };
 
 module.exports = Packet;

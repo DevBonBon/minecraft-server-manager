@@ -19,18 +19,8 @@ class Rcon {
    * Resets the internal state
    */
   reset () {
-    this.queue = [];
-    this.queue.drained = true;
+    this.queue = Packet.queue(2);
     this.authenticated = false;
-  }
-
-  /**
-   * Immediately sends out as many queued packets as possible
-   */
-  drain () {
-    while (this.queue.drained && this.queue.length) {
-      this.queue.drained = this.socket.write(this.queue.shift());
-    }
   }
 
   /**
@@ -44,10 +34,9 @@ class Rcon {
     return Promise.race([
       new Promise(resolve => setTimeout(resolve, timeout, new Error(Rcon.ERR.PACKET))),
       new Promise(resolve => {
-        this.queue.push(Packet.write(id, type, payload));
-        this.queue.push(Packet.write(id, Packet.type.END, ''));
-        this.drain();
         this.events.once(id, resolve);
+        this.queue.write(Packet.create(id, type, payload));
+        this.queue.write(Packet.create(id, Packet.type.END, ''));
       })
     ]).then(result => Promise[result instanceof Error ? 'reject' : 'resolve'](result));
   }
@@ -76,7 +65,6 @@ class Rcon {
     return Promise.race([
       new Promise(resolve => setTimeout(resolve, this.timeout, new Error(Rcon.ERR.CONNECT))),
       new Promise(resolve => {
-        let data = Buffer.allocUnsafe(0);
         this.socket = net.connect({ port, host, timeout: this.timeout })
           .on('error', error => { this.events.emit('error', error); })
           .on('end', () => { this.events.emit('end'); })
@@ -92,23 +80,16 @@ class Rcon {
                 this.events.emit('auth');
               }
               resolve(this.authenticated ? '' : new Error(Rcon.ERR.AUTH));
-            });
+            }).catch(resolve);
           })
-          .on('close', () => { this.reset(); })
-          .on('drain', () => { this.drain(); })
-          .on('data', chunk => { // This could be made into a Transform stream
-            data = Buffer.concat([data, chunk], data.length + chunk.length);
-            // First 12 bytes are guaranteed to be the packet length, id and type
-            for (let end; (end = data.indexOf(Packet.payload.END, 12)) >= 0;) {
-              const packets = [];
-              for (let start = 0; start < end;) {
-                packets.push(Packet.read(data.slice(start, start += data.readInt32LE(start) + 4)));
-              }
-              this.events.emit(packets.pop().id, packets);
-              // Buffer.byteLength(Packet.payload.END, 'ascii') === 20
-              data = data.slice(end + 20);
-            }
-          });
+          .on('close', () => { this.reset(); });
+        const packets = [];
+        this.queue.pipe(this.socket).pipe(Packet.stream()).on('data', packet => {
+          this.queue.emit('consume');
+          packet.payload === Packet.payload.END
+            ? this.events.emit(packet.id, packets.splice(0))
+            : packets.push(packet);
+        });
       })
     ]).then(result => Promise[result instanceof Error ? 'reject' : 'resolve'](result));
   }
