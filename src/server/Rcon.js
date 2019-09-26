@@ -1,5 +1,5 @@
 const net = require('net');
-const EventEmitter = require('events');
+const { once, EventEmitter } = require('events');
 
 const Packet = require(`${__dirname}/Packet.js`);
 /**
@@ -31,14 +31,12 @@ class Rcon {
    */
   send (payload, type, timeout = this.timeout) {
     const id = Packet.id();
+    this.queue.write(Packet.create(id, type, payload));
+    this.queue.write(Packet.create(id, Packet.type.END, ''));
     return Promise.race([
-      new Promise(resolve => setTimeout(resolve, timeout, new Error(Rcon.ERR.PACKET))),
-      new Promise(resolve => {
-        this.events.once(id, resolve);
-        this.queue.write(Packet.create(id, type, payload));
-        this.queue.write(Packet.create(id, Packet.type.END, ''));
-      })
-    ]).then(result => Promise[result instanceof Error ? 'reject' : 'resolve'](result));
+      new Promise((resolve, reject) => setTimeout(reject, timeout, new Error(Rcon.ERR.PACKET))),
+      once(this.events, id)
+    ]).catch(error => Promise.reject(error));
   }
 
   /**
@@ -51,7 +49,8 @@ class Rcon {
     return !this.authenticated
       ? Promise.reject(new Error(Rcon.ERR.AUTH))
       : this.send(command, Packet.type.COMMAND, timeout)
-        .then(packets => packets.map(packet => packet.payload).join(''));
+        .then(packets => packets.map(packet => packet.payload).join(''))
+        .catch(error => Promise.reject(error));
   }
 
   /**
@@ -62,36 +61,30 @@ class Rcon {
    * @return {Promise} Resolves if succesful or rejects with an Error
    */
   connect (password, port = 25575, host = 'localhost') {
+    this.socket = net.connect({ port, host, timeout: this.timeout })
+      .on('error', error => { this.events.emit('error', error); })
+      .on('end', () => { this.events.emit('end'); })
+      .on('close', () => { this.reset(); })
+      .once('connect', () => {
+        this.events.emit('connect');
+        // Send and process authentication packet
+        this.send(password, Packet.type.AUTH).then(result => {
+          this.authenticated = result.pop().id !== -1
+            ? this.events.emit('auth')
+            : this.events.emit('error', new Error(Rcon.ERR.AUTH));
+        }).catch(error => this.events.emit('error', error));
+      });
+    const packets = [];
+    this.queue.pipe(this.socket).pipe(Packet.stream()).on('data', packet => {
+      this.queue.emit('consume');
+      packet.payload === Packet.payload.END
+        ? this.events.emit(packet.id, ...packets.splice(0))
+        : packets.push(packet);
+    });
     return Promise.race([
-      new Promise(resolve => setTimeout(resolve, this.timeout, new Error(Rcon.ERR.CONNECT))),
-      new Promise(resolve => {
-        this.socket = net.connect({ port, host, timeout: this.timeout })
-          .on('error', error => { this.events.emit('error', error); })
-          .on('end', () => { this.events.emit('end'); })
-          .once('error', resolve)
-          .once('connect', () => {
-            this.events.emit('connect');
-            // Send and process authentication packet
-            this.send(password, Packet.type.AUTH).then(results => {
-              // Keep event list clean
-              this.socket.off('error', resolve);
-              if (results.pop().id !== -1) {
-                this.authenticated = true;
-                this.events.emit('auth');
-              }
-              resolve(this.authenticated ? '' : new Error(Rcon.ERR.AUTH));
-            }).catch(resolve);
-          })
-          .on('close', () => { this.reset(); });
-        const packets = [];
-        this.queue.pipe(this.socket).pipe(Packet.stream()).on('data', packet => {
-          this.queue.emit('consume');
-          packet.payload === Packet.payload.END
-            ? this.events.emit(packet.id, packets.splice(0))
-            : packets.push(packet);
-        });
-      })
-    ]).then(result => Promise[result instanceof Error ? 'reject' : 'resolve'](result));
+      new Promise((resolve, reject) => setTimeout(reject, this.timeout, new Error(Rcon.ERR.CONNECT))),
+      once(this.events, 'auth')
+    ]).catch(error => Promise.reject(error));
   }
 }
 

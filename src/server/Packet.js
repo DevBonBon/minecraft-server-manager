@@ -78,6 +78,13 @@ class Packet {
     });
   }
 
+  /**
+   * Creates a new Transform stream, that only allows 'maxConcurrent' number of
+   * Packets to be sent, before waiting for responses
+   *
+   * @param  {Number} maxConcurrent Amount of concurrent Packets allowed
+   * @return {stream.Transform}
+   */
   static queue (maxConcurrent) {
     let concurrent = 0;
     return new Transform({
