@@ -91,16 +91,16 @@ class Packet {
       transform (packet, encoding, callback) {
         const handler = () => {
           if (concurrent < maxConcurrent) {
-            concurrent++;
-            this.push(packet);
             this.off('next', handler);
+            this.push(packet);
+            concurrent++;
           }
         };
         this.on('next', handler);
         this.emit('next');
         callback();
       }
-    }).on('consume', function () { concurrent--; this.emit('next'); })
+    }).on('dequeue', function () { concurrent--; this.emit('next'); })
       .setMaxListeners(0); // We use the internal listener array as the queue
   }
 }
