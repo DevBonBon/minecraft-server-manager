@@ -12,21 +12,14 @@ class Rcon {
   constructor (timeout = 1500) {
     this.timeout = timeout;
     this.events = new EventEmitter();
-    this.reset();
-  }
-
-  /**
-   * Resets the internal state
-   */
-  reset () {
-    this.queue = Packet.queue(2);
-    this.authenticated = false;
+    this.queue = Packet.queue(packet => packet.payload === Packet.payload.END);
   }
 
   /**
    * Send a packet with given payload through the socket
    * @param  {String} payload Data to encode into the packet
-   * @param  {Number} [type=Packet.type.COMMAND] Type of packet to send
+   * @param  {Number} Type of packet to send
+   * @param  {Number} [timeout=this.timeout] Timeout for packet response
    * @return {Promise} Resolves to an array of responses or rejects with an Error
    */
   send (payload, type, timeout = this.timeout) {
@@ -34,7 +27,7 @@ class Rcon {
     this.queue.write(Packet.create(id, type, payload));
     this.queue.write(Packet.create(id, Packet.type.END, ''));
     return new Promise((resolve, reject) => {
-      setTimeout(reject, timeout, new Error(Rcon.ERR.PACKET));
+      setTimeout(reject, timeout, new Error(Rcon.ERROR.PACKET));
       once(this.events, id).then(resolve, reject);
     });
   }
@@ -46,10 +39,8 @@ class Rcon {
    * @return {Promise} Resolves to response string or rejects with an Error
    */
   command (command, timeout = this.timeout) {
-    return !this.authenticated
-      ? Promise.reject(new Error(Rcon.ERR.AUTH))
-      : this.send(command, Packet.type.COMMAND, timeout)
-        .then(packets => packets.map(packet => packet.payload).join(''));
+    return this.send(command, Packet.type.COMMAND, timeout)
+      .then(packets => packets.map(packet => packet.payload).join(''));
   }
 
   /**
@@ -60,32 +51,27 @@ class Rcon {
    * @return {Promise} Resolves if succesful or rejects with an Error
    */
   connect (password, port = 25575, host = 'localhost') {
-    this.socket = net.connect({ port, host, timeout: this.timeout })
-      .on('error', error => this.events.emit('error', error))
-      .on('end', () => this.events.emit('end'))
-      .on('close', () => this.reset())
-      .once('connect', () => {
-        this.events.emit('connect');
-        // Send and process authentication packet
-        this.send(password, Packet.type.AUTH).then(result => {
-          this.authenticated = result.pop().id !== -1
-            ? this.events.emit('auth')
-            : this.events.emit('error', new Error(Rcon.ERR.AUTH));
-        }).catch(error => this.events.emit('error', error));
+    return new Promise((resolve, reject) => {
+      this.socket = net.connect({ port, host, timeout: this.timeout })
+        .on('error', error => this.events.emit('error', error))
+        .on('end', () => this.events.emit('end'))
+        .once('connect', () => {
+          this.events.emit('connect');
+          // Send and process authentication packet
+          this.send(password, Packet.type.AUTH)
+            .then(() => { this.events.emit('auth'); resolve(); }, reject);
+        });
+      this.queue.pipe(this.socket).pipe(Packet.stream()).pipe(this.queue);
+      this.queue.on('dequeue', packets => {
+        packets.some(packet => packet.id === -1)
+          ? this.events.emit('error', Rcon.ERROR.AUTH)
+          : this.events.emit(packets.pop().id, ...packets);
       });
-    const packets = [];
-    this.queue.pipe(this.socket).pipe(Packet.stream()).on('data', packet => {
-      this.queue.emit('dequeue');
-      packet.payload === Packet.payload.END
-        ? this.events.emit(packet.id, ...packets.splice(0))
-        : packets.push(packet);
     });
-    return once(this.events, 'auth');
   }
 }
-
 // Error messages generated
-Rcon.ERR = {
+Rcon.ERROR = {
   PACKET: 'Packet timed out!',
   AUTH: 'Authentication failed!'
 };

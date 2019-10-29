@@ -15,8 +15,8 @@ class Packet {
 
   /**
    * Create a new packet buffer with given ID, type and payload
-   * @param  {Number} id A unique max 32 bit client generated request ID
-   * @param  {Number} type Type of the packet
+   * @param  {Number} id 32 bit client generated request ID
+   * @param  {Number} type 32 bit TYPE of the packet, see 'Packet.type'
    * @param  {String} payload Data to be sent encoded in 'ASCII'
    * @return {Buffer} Created packet
    */
@@ -52,12 +52,12 @@ class Packet {
         payload: packet.toString('ascii', 12, packet.length - 2)
       };
     } else {
-      throw new Error('Invalid packet!');
+      throw new Error(Packet.ERROR.INVALID);
     }
   }
 
   /**
-   * Creates a new Transform stream, that splits the buffer into Packets
+   * Creates a new Transform stream, that splits the buffer into packet Objects
    * @return {stream.Transform}
    */
   static stream () {
@@ -69,7 +69,7 @@ class Packet {
         // 'includes' is not optimal performance wise, but it is nice to look at
         let offset = 0;
         // First 12 bytes are guaranteed to be the packet length, id and type
-        while (data.includes('\0\0', offset + 12)) {
+        while (data.includes('\x00\x00', offset + 12)) {
           this.push(Packet.read(data.slice(offset, offset += data.readInt32LE(offset) + 4)));
         }
         data = data.slice(offset);
@@ -79,29 +79,30 @@ class Packet {
   }
 
   /**
-   * Creates a new Transform stream, that only allows 'maxConcurrent' number of
-   * Packets to be sent, before waiting for responses
+   * TODO: make this a proper description
+   * I have no idea how to describe this. Its a queue you have to pipe back into
+   * so it knows when new packets can be sent. Its suplied a separator function
+   * to determine when to  "dequeue" accumulated packets (that propably needs a rename)
    *
-   * @param  {Number} maxConcurrent Amount of concurrent Packets allowed
+   * @param  {Function} [separator=() => true]
    * @return {stream.Transform}
    */
-  static queue (maxConcurrent) {
-    let concurrent = 0;
+  static queue (separator = () => true) {
     return new Transform({
       transform (packet, encoding, callback) {
-        const handler = () => {
-          if (concurrent < maxConcurrent) {
-            this.off('next', handler);
-            this.push(packet);
-            concurrent++;
-          }
-        };
-        this.on('next', handler);
-        this.emit('next');
+        this.push(packet);
         callback();
       }
-    }).on('dequeue', function () { concurrent--; this.emit('next'); })
-      .setMaxListeners(0); // We use the internal listener array as the queue
+    }).on('data', function () { this.pause(); })
+      .once('pipe', function (source) {
+        const packets = [];
+        source.unpipe(this);
+        source.on('data', packet => {
+          this.resume();
+          packets.push(packet);
+          separator(packet) && this.emit('dequeue', packets.splice(0));
+        });
+      });
   }
 }
 // RCON packet type Integers understood by the Mineccraft Server
@@ -117,6 +118,10 @@ Packet.type = {
 Packet.payload = {
   // Sent when a packet with above invalid type is received
   END: `Unknown request ${Packet.type.END.toString(16)}`
+};
+// Error messages generated
+Packet.ERROR = {
+  INVALID: 'Buffer not a valid Packet!'
 };
 
 module.exports = Packet;
