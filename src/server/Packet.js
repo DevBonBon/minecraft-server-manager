@@ -1,4 +1,4 @@
-const { Transform } = require('stream');
+const { Transform, PassThrough } = require('stream');
 
 /**
  * Functions for managing packets used by the (Minecraft) RCON protocol
@@ -88,12 +88,8 @@ class Packet {
    * @return {stream.Transform}
    */
   static queue (separator = () => true) {
-    return new Transform({
-      transform (packet, encoding, callback) {
-        this.push(packet);
-        callback();
-      }
-    }).on('data', function () { this.pause(); })
+    return new PassThrough()
+      .on('data', function () { this.pause(); })
       .once('pipe', function (source) {
         const packets = [];
         source.unpipe(this);
