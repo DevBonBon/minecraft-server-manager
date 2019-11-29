@@ -8,9 +8,10 @@ const Packet = require(`${__dirname}/Packet.js`);
  * Used to send and parse commands to the Minecraft Server
  */
 class Console extends Rcon {
-  // Seed: [?(-?.+)]?
-  // output (at least one line)
-  // Seed: [?(-?.+)]?
+  /**
+   * Adds separators to requested payload
+   * @return {[type]} [description]
+   */
   static input () {
     return new Transform({
       transform (payload, encoding, callback) {
@@ -22,56 +23,48 @@ class Console extends Rcon {
     });
   }
 
-  // This seems inefficient
+  /**
+   * Removes the data + INFO / WARN etc. from the beginning of lines
+   * @return {[type]} [description]
+   */
   static output () {
     let data = '';
     return new Transform({
       transform (chunk, encoding, callback) {
         data += chunk;
-        console.log(data);
-        let match;
-        while ((match = Console.lineRegExp.exec(data)) !== null) {
-          this.push(match[1]);
-        }
-        data = data.slice(Console.lineRegExp.lastIndex);
-        Console.lineRegExp.lastIndex = 0;
-        console.log(data)
+        data.splice(0, data.lastIndexOf(EOL)).split(EOL).forEach(line => {
+          this.push(line.replace(Console.lineRegExp, '$1'));
+        });
+        data = data.splice(data.lastIndexOf(EOL));
       }
     });
   }
 
   constructor (child, rcon, seed, timeout) {
     super(timeout);
-    this.server = net.createServer();
-    this.server.once('end', () => this.reset());
-    this.server.once('connection', client => {
-      client.queue = [];
-      let firstSeed = false;
-      let atLeastOneLine = false;
-      this.queue = Packet.queue(line => {
-        console.log(line)
-        if (line === seed) {
-          if (!firstSeed) {
-            firstSeed = true;
-            return false;
-          }
-          if (atLeastOneLine) {
-            firstSeed = false;
-            atLeastOneLine = false;
+    this.seed = seed;
+
+    this.server = net.createServer(client => {
+      client.state = Console.STATES.AWAIT;
+
+      client.queue = Packet.queue(line => {
+        switch (client.state) {
+          case Console.STATES.AWAIT:
+            if (line.replace(Console.seedRegExp, '$1') === this.seed) {
+              client.state = Console.STATES.ACTIVE;
+            }
             return true;
-          }
+          case Console.STATES.ACTIVE:
+            client.state = Console.STATES.FILLED;
+            return false;
+          case Console.STATES.FILLED:
+            if (line.replace(Console.seedRegExp, '$1') !== this.seed) {
+              return false;
+            }
+            return true;
         }
-        if (!firstSeed) {
-          return true;
-        }
-        atLeastOneLine = true;
-        return false;
       });
-      this.queue.pipe(Console.input()).pipe(child.stdin);
-      child.stdout.pipe(Console.output()).pipe(this.queue);
-      this.queue.on('dequeue', response => {
-        client.write(Packet.create(client.queue.pop(), Packet.type.COMMAND_RES, ...response));
-      });
+
       client.pipe(Packet.stream()).on('data', packet => {
         switch (packet.type) {
           // We don't keep track of passwords
@@ -81,8 +74,8 @@ class Console extends Rcon {
             break;
           case Packet.type.COMMAND: {
             if (client.authenticated) {
-              client.queue.push(packet.id);
-              this.queue.write(packet.payload);
+              client.id = packet.id;
+              client.queue.write(packet.payload);
             } else {
               client.write(Packet.create(-1, Packet.type.AUTH_RES, ''));
             }
@@ -92,11 +85,29 @@ class Console extends Rcon {
             client.write(Packet.create(packet.id, Packet.type.COMMAND_RES, `Unknown request ${packet.type.toString(16)}`));
         }
       });
+
+      client.queue.pipe(Console.input()).pipe(child.stdin);
+      child.stdout.pipe(Console.output()).pipe(client.queue);
+      this.queue.on('dequeue', responses => {
+        if (client.state === Console.STATES.FILLED) {
+          client.write(Packet.create(client.id, Packet.type.COMMAND_RES, responses.join(' ')));
+          client.state = Console.STATES.AWAIT;
+        }
+      });
     });
+
     this.server.listen({ port: 25575, host: 'localhost' });
   }
 }
 // A RegExp that matches a Minecraft Server output line, where $1 is the message
-Console.lineRegExp = /\[\d{2}:\d{2}:\d{2}\] \[.*\]: (\w+)\r?\n/g;
+Console.lineRegExp = /\[\d{2}:\d{2}:\d{2}\] \[.*\]: (\w+)/;
+// A RegExp that matches an already parsed output line, where $1 is the seed
+Console.seedRegExp = /Seed: \[(?=(-?\w+)\])\1]?/;
+
+Console.STATES = {
+  AWAIT: -1,
+  ACTIVE: 0,
+  FILLED: 1
+};
 
 module.exports = Console;
