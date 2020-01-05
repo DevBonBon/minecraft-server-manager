@@ -8,6 +8,7 @@ const { EOL, networkInterfaces } = require('os');
 const Updater = require(path.resolve(path.join('manager', 'Updater.js')));
 const ProtocolBuffer = require(path.resolve(path.join('manager', 'ProtocolBuffer.js')));
 const Console = require(path.resolve(path.join('manager', 'Console.js')));
+// We only support minecraft 1.7 and upwards
 /**
  * Information about the Minecraft Server executable and methods to manage it
  */
@@ -334,7 +335,12 @@ Server.default = {
    * JVM arguments used to start the server
    * @type {String}
    */
-  arguments: '-Xms768M -Xmx2G'
+  arguments: '-Xms768M -Xmx2G',
+  /**
+   * Whether RCON will be used internally to manage the server
+   * @type {[type]}
+   */
+  rcon: false
 };
 
 module.exports = Server;
