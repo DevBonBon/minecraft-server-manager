@@ -6,14 +6,6 @@ const { Transform, PassThrough } = require('stream');
  */
 class Packet {
   /**
-   * Generate a unique max 32 bit ID integer
-   * @return {Number} Generated ID
-   */
-  static id () {
-    return Number.parseInt(Math.random().toString(2).substring(2, 32), 2);
-  }
-
-  /**
    * Create a new packet buffer with given ID, type and payload
    * @param  {Number} id 32 bit client generated request ID
    * @param  {Number} type 32 bit TYPE of the packet, see 'Packet.type'

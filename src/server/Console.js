@@ -9,8 +9,8 @@ const Packet = require(`${__dirname}/Packet.js`);
  */
 class Console extends Rcon {
   /**
-   * Adds separators to requested payload
-   * @return {[type]} [description]
+   * Creates a new Transform stream, that adds separators to requested payload
+   * @return {stream.Transform}
    */
   static input () {
     return new Transform({
@@ -24,23 +24,23 @@ class Console extends Rcon {
   }
 
   /**
-   * Removes the data + INFO / WARN etc. from the beginning of lines
-   * @return {[type]} [description]
+   * Creates a new Transform stream, that removes the date and log type prefix
+   * from the beginning of lines
+   * @return {stream.Transform}
    */
   static output () {
     let data = '';
     return new Transform({
       transform (chunk, encoding, callback) {
-        data += chunk;
-        data.splice(0, data.lastIndexOf(EOL)).split(EOL).forEach(line => {
-          this.push(line.replace(Console.lineRegExp, '$1'));
-        });
-        data = data.splice(data.lastIndexOf(EOL));
+        const lines = `${data}${chunk}`.split(EOL);
+        data = lines.pop();
+        lines.forEach(line => this.push(line.replace(Console.lineRegExp, '$1')));
+        callback();
       }
     });
   }
 
-  constructor (child, rcon, seed, timeout) {
+  constructor (child, seed, timeout) {
     super(timeout);
     this.seed = seed;
 
@@ -48,6 +48,7 @@ class Console extends Rcon {
       client.state = Console.STATES.AWAIT;
 
       client.queue = Packet.queue(line => {
+        line = line.toString();
         switch (client.state) {
           case Console.STATES.AWAIT:
             if (line.replace(Console.seedRegExp, '$1') === this.seed) {
@@ -88,7 +89,7 @@ class Console extends Rcon {
 
       client.queue.pipe(Console.input()).pipe(child.stdin);
       child.stdout.pipe(Console.output()).pipe(client.queue);
-      this.queue.on('dequeue', responses => {
+      client.queue.on('dequeue', responses => {
         if (client.state === Console.STATES.FILLED) {
           client.write(Packet.create(client.id, Packet.type.COMMAND_RES, responses.join(' ')));
           client.state = Console.STATES.AWAIT;
@@ -100,7 +101,7 @@ class Console extends Rcon {
   }
 }
 // A RegExp that matches a Minecraft Server output line, where $1 is the message
-Console.lineRegExp = /\[\d{2}:\d{2}:\d{2}\] \[.*\]: (\w+)/;
+Console.lineRegExp = /.*?]: (.+)/;
 // A RegExp that matches an already parsed output line, where $1 is the seed
 Console.seedRegExp = /Seed: \[(?=(-?\w+)\])\1]?/;
 

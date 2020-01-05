@@ -23,7 +23,8 @@ class Rcon {
    * @return {Promise} Resolves to an array of responses or rejects with an Error
    */
   send (payload, type, timeout = this.timeout) {
-    const id = Packet.id();
+    // Generates a unique max 32 bit ID integer
+    const id = Number.parseInt(Math.random().toString(2).substring(2, 32), 2);
     this.queue.write(Packet.create(id, type, payload));
     this.queue.write(Packet.create(id, Packet.type.END, ''));
     return new Promise((resolve, reject) => {
