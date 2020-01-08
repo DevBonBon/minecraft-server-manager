@@ -1,4 +1,4 @@
-const { Transform, PassThrough } = require('stream');
+const { Transform } = require('stream');
 
 /**
  * Functions for managing packets used by the (Minecraft) RCON protocol
@@ -6,16 +6,15 @@ const { Transform, PassThrough } = require('stream');
  */
 class Packet {
   /**
-   * Create a new packet buffer with given ID, type and payload
-   * @param  {Number} id 32 bit client generated request ID
-   * @param  {Number} type 32 bit TYPE of the packet, see 'Packet.type'
-   * @param  {String} payload Data to be sent encoded in 'ASCII'
+   * @param  {Number} id Packet id 32 bit Integer, client generated
+   * @param  {Number} type Packet type 32 bit Integer, see 'Packet.type'
+   * @param  {String} payload Packet data to be sent, encoded in 'ASCII'
    * @return {Buffer} Created packet
    */
   static create (id, type, payload) {
     // Length of payload in bytes when encoded in ASCII
     const length = Buffer.byteLength(payload, 'ascii');
-    // 14 bytes for the length, ID, type and 2-byte padding
+    // 14 bytes for the length, id, type and 2-byte padding
     const buffer = Buffer.allocUnsafe(14 + length);
     // Offsets are hardcoded for speed
     buffer.writeInt32LE(10 + length, 0);
@@ -27,25 +26,17 @@ class Packet {
   }
 
   /**
-   * Parse the given packet into a JSON object
-   * @param  {Buffer} packet
-   * @return {Object} Parsed packet
+   * @param  {Buffer} packet Packet which to read data from
+   * @return {Object} An Object that represents the parsed packet
    */
   static read (packet) {
-    // Length of the rest of the packet
-    const length = packet.readInt32LE(0);
-    // Check if we have a valid packet with 2 null bytes of padding in the end
-    if (packet.length === 4 + length && !packet.readInt16LE(packet.length - 2)) {
+    return {
       // Offsets are hardcoded for speed
-      return {
-        length: length,
-        id: packet.readInt32LE(4),
-        type: packet.readInt32LE(8),
-        payload: packet.toString('ascii', 12, packet.length - 2)
-      };
-    } else {
-      throw new Error(Packet.ERROR.INVALID);
-    }
+      length: packet.readInt32LE(0),
+      id: packet.readInt32LE(4),
+      type: packet.readInt32LE(8),
+      payload: packet.toString('ascii', 12, packet.length - 2)
+    };
   }
 
   /**
@@ -62,6 +53,7 @@ class Packet {
         let offset = 0;
         // First 12 bytes are guaranteed to be the packet length, id and type
         while (data.includes('\x00\x00', offset + 12)) {
+          // Add packet length (including the length Integer) to offset
           this.push(Packet.read(data.slice(offset, offset += data.readInt32LE(offset) + 4)));
         }
         data = data.slice(offset);
@@ -71,45 +63,46 @@ class Packet {
   }
 
   /**
-   * TODO: make this a proper description
-   * I have no idea how to describe this. Its a queue you have to pipe back into
-   * so it knows when new packets can be sent. Its suplied a separator function
-   * to determine when to  "dequeue" accumulated packets (that propably needs a rename)
-   *
-   * @param  {Function} [separator=() => true]
+   * Creates a new Transform stream, that accumulates received chunks into an array.
+   * Each received chunk is tested using the given separator function and if
+   * truthy, the array of accumulated chunks is passed on.
+   * @param  {Function} separator Defaults to behaving like a PassThrough stream
    * @return {stream.Transform}
    */
-  static queue (separator = () => true) {
-    return new PassThrough()
-      .on('data', function () { this.pause(); })
-      .once('pipe', function (source) {
-        const packets = [];
-        source.unpipe(this);
-        source.on('data', packet => {
-          this.resume();
-          packets.push(packet);
-          separator(packet) && this.emit('dequeue', packets.splice(0));
-        });
-      });
+  static packer (separator = () => true) {
+    const chunks = [];
+    return new Transform({
+      objectMode: true,
+      transform (chunk, encoding, callback) {
+        chunks.push(chunk);
+        callback(null, separator(chunk) ? chunks.splice(0) : undefined);
+      }
+    });
   }
 }
-// RCON packet type Integers understood by the Mineccraft Server
-Packet.type = {
-  AUTH: 3,
-  AUTH_RES: 2,
-  COMMAND: 2,
-  COMMAND_RES: 0,
+// Packet types understood by the server, when sent by the client
+Packet.request = {
   // Invalid type that's used to detect when the full response has been received
-  END: 255
+  END: 1,
+  AUTH: 3,
+  COMMAND: 2
+};
+// Packet types sent by the server, with keys as the corresponding request type
+Packet.response = {
+  // Responses to invalid types are identical to command responses
+  [Packet.request.END]: 0,
+  [Packet.request.AUTH]: 2,
+  [Packet.request.COMMAND]: 0
 };
 // Predefined payloads the Minecraft Server can send
 Packet.payload = {
+  // Message sent when a packet with an unknown type is received
+  UNKNOWN: type => `Unknown request ${type.toString(16)}`,
   // Sent when a packet with above invalid type is received
-  END: `Unknown request ${Packet.type.END.toString(16)}`
-};
-// Error messages generated
-Packet.ERROR = {
-  INVALID: 'Buffer not a valid Packet!'
+  get END () {
+    delete Packet.payload.END;
+    return (Packet.payload.END = Packet.payload.UNKNOWN(Packet.request.END));
+  }
 };
 
 module.exports = Packet;

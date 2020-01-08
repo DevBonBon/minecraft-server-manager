@@ -1,23 +1,25 @@
-const net = require('net');
+const { Server } = require('net');
 const { EOL } = require('os');
 const { Transform } = require('stream');
+const { once } = require('events');
 
-const Rcon = require(`${__dirname}/Rcon.js`);
 const Packet = require(`${__dirname}/Packet.js`);
 /**
  * Used to send and parse commands to the Minecraft Server
  */
-class Console extends Rcon {
+class RconServer extends Server {
   /**
    * Creates a new Transform stream, that adds separators to requested payload
    * @return {stream.Transform}
    */
   static input () {
     return new Transform({
-      transform (payload, encoding, callback) {
-        // We write everything in one go, to avoid any user generated output from
-        // appearing in between wanted responses (verify this)
-        this.push(`/seed${EOL}${payload}${EOL}/seed${EOL}`);
+      writableObjectMode: true,
+      transform ({ id, type, payload }, encoding, callback) {
+        // Assume the ip is already banned
+        this.push(`pardon-ip 192.0.2.0${EOL}`);
+        payload && this.push(`${payload}${EOL}`);
+        this.push(`ban-ip 192.0.2.0 ${id},${type}${EOL}`);
         callback();
       }
     });
@@ -28,87 +30,47 @@ class Console extends Rcon {
    * from the beginning of lines
    * @return {stream.Transform}
    */
-  static output () {
+  static format () {
     let data = '';
     return new Transform({
+      encoding: 'utf8',
       transform (chunk, encoding, callback) {
         const lines = `${data}${chunk}`.split(EOL);
         data = lines.pop();
-        lines.forEach(line => this.push(line.replace(Console.lineRegExp, '$1')));
+        lines.forEach(line => this.push(line.replace(RconServer.prefix, '$1')));
         callback();
       }
     });
   }
 
-  constructor (child, seed, timeout) {
-    super(timeout);
-    this.seed = seed;
-
-    this.server = net.createServer(client => {
-      client.state = Console.STATES.AWAIT;
-
-      client.queue = Packet.queue(line => {
-        line = line.toString();
-        switch (client.state) {
-          case Console.STATES.AWAIT:
-            if (line.replace(Console.seedRegExp, '$1') === this.seed) {
-              client.state = Console.STATES.ACTIVE;
-            }
-            return true;
-          case Console.STATES.ACTIVE:
-            client.state = Console.STATES.FILLED;
-            return false;
-          case Console.STATES.FILLED:
-            if (line.replace(Console.seedRegExp, '$1') !== this.seed) {
-              return false;
-            }
-            return true;
+  static output () {
+    return new Transform({
+      writableObjectMode: true,
+      transform (lines, encoding, callback) {
+        const [, id, type] = lines.pop().match(RconServer.separator);
+        if (id != null && type != null) {
+          const response = lines.join(' ') || Packet.payload.UNKNOWN(type);
+          this.push(Packet.create(id, Packet.response[type], response));
         }
-      });
-
-      client.pipe(Packet.stream()).on('data', packet => {
-        switch (packet.type) {
-          // We don't keep track of passwords
-          case Packet.type.AUTH:
-            client.authenticated = true;
-            client.write(Packet.create(packet.id, Packet.type.AUTH_RES, ''));
-            break;
-          case Packet.type.COMMAND: {
-            if (client.authenticated) {
-              client.id = packet.id;
-              client.queue.write(packet.payload);
-            } else {
-              client.write(Packet.create(-1, Packet.type.AUTH_RES, ''));
-            }
-            break;
-          }
-          default:
-            client.write(Packet.create(packet.id, Packet.type.COMMAND_RES, `Unknown request ${packet.type.toString(16)}`));
-        }
-      });
-
-      client.queue.pipe(Console.input()).pipe(child.stdin);
-      child.stdout.pipe(Console.output()).pipe(client.queue);
-      client.queue.on('dequeue', responses => {
-        if (client.state === Console.STATES.FILLED) {
-          client.write(Packet.create(client.id, Packet.type.COMMAND_RES, responses.join(' ')));
-          client.state = Console.STATES.AWAIT;
-        }
-      });
+        callback();
+      }
     });
+  }
 
-    this.server.listen({ port: 25575, host: 'localhost' });
+  listen (child, port = 25575, host = 'localhost') {
+    child.stdin.write('ban-ip 192.0.2.0');
+    this.on('connection', client => {
+      const packer = Packet.packer(line => console.log(line) && RconServer.separator.test(line));
+      client.pipe(Packet.stream()).pipe(RconServer.input()).pipe(child.stdin);
+      child.stdout.pipe(RconServer.format()).pipe(packer).pipe(RconServer.output()).pipe(client);
+    });
+    super.listen(port, host);
+    return once(this, 'listening').then(([self]) => self);
   }
 }
 // A RegExp that matches a Minecraft Server output line, where $1 is the message
-Console.lineRegExp = /.*?]: (.+)/;
+RconServer.prefix = /](?: CONSOLE)?:? (.+)$/;
 // A RegExp that matches an already parsed output line, where $1 is the seed
-Console.seedRegExp = /Seed: \[(?=(-?\w+)\])\1]?/;
+RconServer.separator = /ip 192\.0\.2\.0:?(?: (\d{1,10}),(\d))?/i;
 
-Console.STATES = {
-  AWAIT: -1,
-  ACTIVE: 0,
-  FILLED: 1
-};
-
-module.exports = Console;
+module.exports = RconServer;
