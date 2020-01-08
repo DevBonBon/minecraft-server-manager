@@ -5,9 +5,9 @@ const { once } = require('events');
 
 const Packet = require(`${__dirname}/Packet.js`);
 /**
- * Used to send and parse commands to the Minecraft Server
+ * Emulates the Minecraft RCON Server using Standard I/O streams
  */
-class RconServer extends Server {
+class IOServer extends Server {
   /**
    * Creates a new Transform stream, that adds separators to requested payload
    * @return {stream.Transform}
@@ -37,7 +37,7 @@ class RconServer extends Server {
       transform (chunk, encoding, callback) {
         const lines = `${data}${chunk}`.split(EOL);
         data = lines.pop();
-        lines.forEach(line => this.push(line.replace(RconServer.prefix, '$1')));
+        lines.forEach(line => this.push(line.replace(IOServer.prefix, '$1')));
         callback();
       }
     });
@@ -47,7 +47,7 @@ class RconServer extends Server {
     return new Transform({
       writableObjectMode: true,
       transform (lines, encoding, callback) {
-        const [, id, type] = lines.pop().match(RconServer.separator);
+        const [, id, type] = lines.pop().match(IOServer.separator);
         if (id != null && type != null) {
           const response = lines.join(' ') || Packet.payload.UNKNOWN(type);
           this.push(Packet.create(id, Packet.response[type], response));
@@ -60,17 +60,17 @@ class RconServer extends Server {
   listen (child, port = 25575, host = 'localhost') {
     child.stdin.write('ban-ip 192.0.2.0');
     this.on('connection', client => {
-      const packer = Packet.packer(line => console.log(line) && RconServer.separator.test(line));
-      client.pipe(Packet.stream()).pipe(RconServer.input()).pipe(child.stdin);
-      child.stdout.pipe(RconServer.format()).pipe(packer).pipe(RconServer.output()).pipe(client);
+      const packer = Packet.packer(line => IOServer.separator.test(line));
+      client.pipe(Packet.stream()).pipe(IOServer.input()).pipe(child.stdin);
+      child.stdout.pipe(IOServer.format()).pipe(packer).pipe(IOServer.output()).pipe(client);
     });
     super.listen(port, host);
-    return once(this, 'listening').then(([self]) => self);
+    return once(this, 'listening').then(() => this);
   }
 }
 // A RegExp that matches a Minecraft Server output line, where $1 is the message
-RconServer.prefix = /](?: CONSOLE)?:? (.+)$/;
+IOServer.prefix = /](?: CONSOLE)?:? (.+)$/;
 // A RegExp that matches an already parsed output line, where $1 is the seed
-RconServer.separator = /ip 192\.0\.2\.0:?(?: (\d{1,10}),(\d))?/i;
+IOServer.separator = /ip 192\.0\.2\.0:?(?: (\d{1,10}),(\d))?/i;
 
-module.exports = RconServer;
+module.exports = IOServer;

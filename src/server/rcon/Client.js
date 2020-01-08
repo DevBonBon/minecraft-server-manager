@@ -5,7 +5,7 @@ const Packet = require(`${__dirname}/Packet.js`);
 /**
  * Used to connect and send commands to a console through the RCON protocol
  */
-class Rcon extends Socket {
+class Client extends Socket {
   /**
    * Send a packet with given payload through the socket
    * @param  {Number} type Type to encode into the packet
@@ -18,7 +18,7 @@ class Rcon extends Socket {
     this.write(Packet.create(id, type, payload));
     this.write(Packet.create(id, Packet.request.END, ''));
     return new Promise((resolve, reject) => {
-      setTimeout(reject, timeout, new Error(Rcon.ERROR.PACKET));
+      setTimeout(reject, timeout, new Error(Client.ERROR.PACKET));
       once(this, id).then(resolve, reject);
     });
   }
@@ -43,25 +43,21 @@ class Rcon extends Socket {
    * @return {Promise} Resolves to the socket itself or rejects with an Error
    */
   connect (password, port = 25575, host = 'localhost', timeout = 1500) {
+    // Create the connection pipeline and send an authentication packet
     const packer = Packet.packer(packet => packet.payload === Packet.payload.END);
-    this.pipe(Packet.stream()).pipe(packer).on('data', packets => {
+    super.connect(port, host).pipe(Packet.stream()).pipe(packer).on('data', packets => {
       packets.some(packet => packet.id === -1)
-        ? this.emit('error', Rcon.ERROR.AUTH)
+        ? this.emit('error', Client.ERROR.AUTH)
         : this.emit(packets.pop().id, ...packets);
     });
-    return new Promise((resolve, reject) => {
-      super.connect(port, host, () => {
-        // Send and process authentication packet
-        this.send(Packet.request.AUTH, password, timeout)
-          .then(() => { this.emit('auth'); resolve(this); }, reject);
-      });
-    });
+    return this.send(Packet.request.AUTH, password, timeout)
+      .then(() => { this.emit('auth'); return this; });
   }
 }
 // Error messages generated
-Rcon.ERROR = {
+Client.ERROR = {
   PACKET: 'Packet timed out!',
   AUTH: 'Authentication failed!'
 };
 
-module.exports = Rcon;
+module.exports = Client;
